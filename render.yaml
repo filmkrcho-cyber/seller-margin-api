@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: seller-margin-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: NAVER_CLIENT_ID
+        value: U1mSVClo9bwFBunvuERp
+      - key: NAVER_CLIENT_SECRET
+        value: nk6YqwnDWI
