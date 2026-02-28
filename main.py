@@ -8,6 +8,7 @@
 from pathlib import Path
 import os
 import datetime
+import json
 
 from dotenv import load_dotenv
 
@@ -100,17 +101,85 @@ async def trend_product(query: str):
     return await get_trend(query)
 
 
+# ---------- 시즌 캘린더 ----------
+SEASON_KEYWORDS = {
+    "1월": ["핫팩", "방한용품", "가습기", "새해선물"],
+    "2월": ["발렌타인", "핫팩", "봄옷"],
+    "3월": ["봄청소용품", "텃밭가드닝", "황사마스크", "미세먼지"],
+    "4월": ["봄나들이", "캠핑", "자전거", "봄옷"],
+    "5월": ["어버이날선물", "스승의날", "선풍기", "캠핑"],
+    "6월": ["여름용품", "수영복", "선크림", "모기장"],
+    "7월": ["선풍기", "에어컨", "여름간식", "물놀이"],
+    "8월": ["여름용품", "개학준비", "학용품"],
+    "9월": ["추석선물", "가을옷", "등산용품"],
+    "10월": ["핼러윈", "가을패션", "난방용품"],
+    "11월": ["수능선물", "핫팩", "크리스마스선물"],
+    "12월": ["크리스마스", "연말선물", "핫팩", "방한용품"],
+}
+
+
+@app.get("/season")
+async def get_season_calendar(month: int = None):
+    """이번달 + 선택월 시즌 트렌드 조회."""
+    today = datetime.date.today()
+    target_month = month or today.month
+    key = f"{target_month}월"
+    keywords = SEASON_KEYWORDS.get(key, SEASON_KEYWORDS.get("1월", []))
+
+    results = []
+    for keyword in keywords:
+        trend = await get_trend(keyword)
+        if trend.get("success"):
+            avg = trend.get("avg_ratio") or 1
+            change_pct = (
+                round((trend["current_ratio"] / avg - 1) * 100, 1) if avg > 0 else 0
+            )
+            results.append({
+                "keyword": keyword,
+                "season": trend.get("season", ""),
+                "season_icon": trend.get("season_icon", ""),
+                "current_ratio": trend.get("current_ratio", 0),
+                "avg_ratio": avg,
+                "change_pct": change_pct,
+            })
+        else:
+            results.append({
+                "keyword": keyword,
+                "season": "—",
+                "season_icon": "🟡",
+                "current_ratio": 0,
+                "avg_ratio": 1,
+                "change_pct": 0,
+            })
+
+    results.sort(
+        key=lambda x: x["current_ratio"] / max(x["avg_ratio"], 0.01),
+        reverse=True,
+    )
+    return {"success": True, "month": target_month, "keywords": results}
+
+
 # ---------- 타겟층 (데이터랩 쇼핑인사이트) ----------
-# 네이버 쇼핑인사이트 API는 카테고리 코드 필요. 미제공 시 조회 불가 반환(에러 아님)
-CATEGORY_TO_NAVER_CODE = {
+# 네이버 쇼핑인사이트 API는 카테고리 코드 필요. /category 결과의 카테고리명으로 매핑, 실패 시 50000167(전체)
+NAVER_CATEGORY_CODES = {
+    "패션의류": "50000000",
+    "패션잡화": "50000001",
+    "화장품/미용": "50000002",
+    "디지털/가전": "50000003",
+    "가구/인테리어": "50000004",
+    "출산/육아": "50000005",
+    "식품": "50000006",
+    "스포츠/레저": "50000007",
+    "생활/건강": "50000008",
+    "여행/문화": "50000009",
+    "면세점": "50000010",
+    "기타": "50000167",
     "의류": "50000804",
-    "식품": "50000167",
     "생활용품": "50000167",
     "전자기기": "50000167",
-    "가전": "50000167",
-    "화장품": "50000802",
-    "스포츠": "50000167",
-    "기타": "50000167",
+    "가전": "50000003",
+    "화장품": "50000002",
+    "스포츠": "50000007",
 }
 
 
@@ -125,7 +194,7 @@ async def get_target_audience(query: str, category: str = ""):
             "age_groups": None,
             "main_target": "조회 불가",
         }
-    category_code = CATEGORY_TO_NAVER_CODE.get(category or "기타", "50000167")
+    category_code = NAVER_CATEGORY_CODES.get(category or "기타", "50000167")
     today = datetime.date.today()
     start_date = (today - datetime.timedelta(days=90)).strftime("%Y-%m-%d")
     end_date = today.strftime("%Y-%m-%d")
@@ -451,3 +520,68 @@ async def analyze_margin(query: str, cost: float, sup_ship: float = 0, mkt_ship:
         },
         "top_items": search.get("top_items", [])[:5],
     }
+
+
+# ---------- 마켓 주문 수집 (뼈대) ----------
+@app.get("/orders/smartstore")
+async def get_smartstore_orders(request: Request, date_from: str = None):
+    """스마트스토어 주문 수집 - API 키 발급 후 구현."""
+    client_id = request.headers.get("X-Smartstore-Client-Id", "")
+    client_secret = request.headers.get("X-Smartstore-Client-Secret", "")
+    if not client_id or not client_secret:
+        return {
+            "success": False,
+            "error": "스마트스토어 API 키 미설정",
+            "guide": "설정 탭 → 마켓 API 키에서 입력해주세요.",
+        }
+    return {"success": False, "error": "준비 중"}
+
+
+@app.get("/orders/coupang")
+async def get_coupang_orders(request: Request, date_from: str = None):
+    """쿠팡 Wing 주문 수집 - API 키 발급 후 구현."""
+    access_key = request.headers.get("X-Coupang-Access-Key", "")
+    secret_key = request.headers.get("X-Coupang-Secret-Key", "")
+    if not access_key or not secret_key:
+        return {
+            "success": False,
+            "error": "쿠팡 API 키 미설정",
+            "guide": "설정 탭 → 마켓 API 키에서 입력해주세요.",
+        }
+    return {"success": False, "error": "준비 중"}
+
+
+# ---------- 카카오 나에게 보내기 ----------
+@app.post("/kakao/send")
+async def send_kakao(request: Request):
+    """카카오 나에게 보내기 API. X-Kakao-Token 헤더에 액세스 토큰 전달."""
+    kakao_token = request.headers.get("X-Kakao-Token", "")
+    if not kakao_token:
+        return {"success": False, "error": "카카오 토큰 없음"}
+    try:
+        body = await request.json()
+        message = body.get("message", "")
+    except Exception:
+        message = ""
+    if not message:
+        return {"success": False, "error": "메시지 없음"}
+
+    url = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
+    headers = {"Authorization": f"Bearer {kakao_token}", "Content-Type": "application/x-www-form-urlencoded"}
+    payload = {
+        "template_object": json.dumps({
+            "object_type": "text",
+            "text": message,
+            "link": {
+                "web_url": "https://nimble-sunshine-03744e.netlify.app",
+                "mobile_web_url": "https://nimble-sunshine-03744e.netlify.app",
+            },
+        })
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, headers=headers, data=payload)
+            data = res.json()
+        return {"success": data.get("result_code") == 0, "error": data.get("msg")}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
