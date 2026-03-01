@@ -7,6 +7,7 @@
 """
 from pathlib import Path
 import os
+import re
 import datetime
 import json
 
@@ -379,6 +380,59 @@ async def category_classify(query: str):
         "fee_rate": DEFAULT_FEE,
         "risk_level": matched["risk"],
         "special_notes": matched.get("notes", []),
+    }
+
+
+# ---------- 도매꾹 URL 파싱 ----------
+@app.get("/parse-url")
+async def parse_wholesale_url(request: Request, url: str = ""):
+    """
+    도매꾹 상품 URL에서 원가 자동 추출.
+    지원: 도매꾹 (domeggook.com)
+    미지원: 그 외 사이트 → 수동 입력 안내.
+    """
+    if not url or "domeggook.com" not in url:
+        return {
+            "success": False,
+            "supported": False,
+            "message": "현재 도매꾹 URL만 자동 추출 지원됩니다. 원가를 직접 입력해주세요.",
+        }
+    match = re.search(r"aid=(\d+)", url)
+    if not match:
+        return {"success": False, "error": "상품 ID를 찾을 수 없습니다."}
+    item_id = match.group(1)
+    api_key = request.headers.get("X-Domeggook-Key", "").strip()
+    if not api_key:
+        return {
+            "success": False,
+            "error": "도매꾹 API 키 미설정",
+            "guide": "설정 탭에서 도매꾹 API 키를 입력해주세요.",
+        }
+    params = {
+        "ver": "6.1",
+        "cmd": "getItem",
+        "aid": api_key,
+        "no": item_id,
+        "out": "json",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get("https://domeggook.com/ssl/api/", params=params)
+            data = res.json()
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    item = data.get("item", {}) if isinstance(data, dict) else {}
+    if not item:
+        return {"success": False, "error": "상품 정보를 가져올 수 없습니다."}
+    return {
+        "success": True,
+        "source": "도매꾹",
+        "name": item.get("name", ""),
+        "price": int(item.get("price", 0) or 0),
+        "stock": item.get("stock", 0),
+        "image": item.get("img", ""),
+        "link": url,
+        "supplier": item.get("seller", ""),
     }
 
 
